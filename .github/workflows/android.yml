@@ -8,6 +8,7 @@ on:
 jobs:
   android:
     runs-on: ubuntu-22.04
+    permissions: { contents: write }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -21,8 +22,21 @@ jobs:
           key: core-android-arm64-${{ hashFiles('android/build-apk.sh') }}
       - name: Build APK
         run: |
+          set -o pipefail
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018
-          android/build-apk.sh
+          android/build-apk.sh 2>&1 | tee build.log
       - uses: actions/upload-artifact@v4
         with: { name: SmashTV-android, path: dist/SmashTV.apk }
 
+      - name: Publish result to the build-output branch
+        if: always()
+        run: |
+          mkdir -p /tmp/out
+          tail -n 400 build.log > /tmp/out/build-log.txt 2>/dev/null || echo "no log" > /tmp/out/build-log.txt
+          [ -f dist/SmashTV.apk ] && cp dist/SmashTV.apk /tmp/out/
+          echo "${{ job.status }} $(date -u)" > /tmp/out/status.txt
+          cd /tmp/out
+          git init -q -b build-output
+          git config user.name "github-actions"; git config user.email "actions@github.com"
+          git add -A; git commit -q -m "Build output ${{ github.sha }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" build-output
