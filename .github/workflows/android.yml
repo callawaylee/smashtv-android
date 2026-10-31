@@ -13,9 +13,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
-      - uses: android-actions/setup-android@v3
-      - name: Install NDK
-        run: sdkmanager --install "ndk;27.2.12479018"
       - uses: actions/cache@v4
         with:
           path: android/app/libs
@@ -23,9 +20,16 @@ jobs:
       - name: Build APK
         run: |
           set -o pipefail
-          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018
-          android/build-apk.sh 2>&1 | tee build.log
+          {
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "ANDROID_NDK_LATEST_HOME=$ANDROID_NDK_LATEST_HOME ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+            ls "$ANDROID_HOME/ndk" || true
+            export ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}
+            java -version
+            android/build-apk.sh
+          } 2>&1 | tee build.log
       - uses: actions/upload-artifact@v4
+        if: success()
         with: { name: SmashTV-android, path: dist/SmashTV.apk }
 
       - name: Publish result to the build-output branch
