@@ -1,0 +1,6 @@
+# The same game code as the desktop version (../../../../src)
+set(TOP ${CMAKE_CURRENT_SOURCE_DIR}/../../../../src)
+add_library(main SHARED ${TOP}/main.c ${TOP}/romset.c ${TOP}/touch.c)
+target_include_directories(main PRIVATE ${TOP})
+target_compile_options(main PRIVATE -O2)
+target_link_libraries(main PRIVATE SDL3::SDL3-shared)

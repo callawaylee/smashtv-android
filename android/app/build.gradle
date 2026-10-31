@@ -1,0 +1,63 @@
+plugins {
+     id 'com.android.application'
+}
+
+def buildWithCMake = true
+
+android {
+    namespace = "io.github.smashtv_native"
+    compileSdkVersion 35
+    defaultConfig {
+        minSdkVersion 24
+        targetSdkVersion 35
+        applicationId "io.github.smashtv_native"
+        versionCode 1
+        versionName "1.2.0"
+        externalNativeBuild {
+            ndkBuild {
+                arguments "APP_PLATFORM=android-24"
+                // abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+                abiFilters 'arm64-v8a'
+            }
+            cmake {
+                arguments "-DANDROID_PLATFORM=android-24", "-DANDROID_STL=c++_static", "-DCMAKE_BUILD_TYPE=Release"
+                // abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+                abiFilters 'arm64-v8a'
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    applicationVariants.all { variant ->
+        tasks["merge${variant.name.capitalize()}Assets"]
+            .dependsOn("externalNativeBuild${variant.name.capitalize()}")
+    }
+    if (!project.hasProperty('EXCLUDE_NATIVE_LIBS')) {
+        sourceSets.main {
+            jniLibs.srcDir 'libs'
+        }
+        externalNativeBuild {
+            if (buildWithCMake) {
+                cmake {
+                    path 'jni/CMakeLists.txt'
+                }
+            } else {
+                ndkBuild {
+                    path 'jni/Android.mk'
+                }
+            }
+        }
+
+    }
+    lint {
+        abortOnError = false
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+}

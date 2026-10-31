@@ -1,0 +1,133 @@
+name: Build Smash T.V. Native
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04          # older glibc = runs on more distros
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git python3 perl \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxfixes-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl1-mesa-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev libdbus-1-dev
+      - uses: actions/cache@v4
+        with:
+          path: core
+          key: core-linux-${{ hashFiles('scripts/build-core.sh') }}
+      - name: Build core
+        run: test -f core/mame_libretro.so || scripts/build-core.sh core
+      - name: Build app
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSMASHTV_VENDOR_SDL=ON
+          cmake --build build -j
+      - name: Package
+        run: |
+          mkdir -p pkg/SmashTV
+          cp build/smashtv core/mame_libretro.so pkg/SmashTV/
+          cp packaging/install-linux.sh pkg/SmashTV/install.sh
+          cp packaging/README-player.txt pkg/SmashTV/README.txt
+          tar -C pkg -czf SmashTV-linux-x86_64.tar.gz SmashTV
+      - uses: actions/upload-artifact@v4
+        with: { name: SmashTV-linux-x86_64, path: SmashTV-linux-x86_64.tar.gz }
+
+  macos:
+    runs-on: macos-14              # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: core
+          key: core-macos-arm64-${{ hashFiles('scripts/build-core.sh') }}
+      - name: Build core
+        run: test -f core/mame_libretro.dylib || scripts/build-core.sh core
+      - name: Build app
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSMASHTV_VENDOR_SDL=ON
+          cmake --build build -j
+      - name: Package
+        run: |
+          mkdir -p pkg
+          cp -R "build/Smash TV.app" pkg/
+          mkdir -p "pkg/Smash TV.app/Contents/Frameworks"
+          cp core/mame_libretro.dylib "pkg/Smash TV.app/Contents/Frameworks/"
+          codesign --force --deep -s - "pkg/Smash TV.app"
+          cp packaging/README-player.txt pkg/README.txt
+          cd pkg && zip -qry ../SmashTV-macos-arm64.zip .
+      - uses: actions/upload-artifact@v4
+        with: { name: SmashTV-macos-arm64, path: SmashTV-macos-arm64.zip }
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git make perl zip
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-python
+            mingw-w64-x86_64-ntldd mingw-w64-x86_64-ninja
+      - uses: actions/cache@v4
+        with:
+          path: core
+          key: core-windows-x64-${{ hashFiles('scripts/build-core.sh') }}
+      - name: Build core
+        run: test -f core/mame_libretro.dll || scripts/build-core.sh core
+      - name: Build app
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSMASHTV_VENDOR_SDL=ON
+          cmake --build build -j
+      - name: Package
+        run: |
+          mkdir -p pkg/SmashTV
+          cp build/smashtv.exe core/mame_libretro.dll pkg/SmashTV/
+          # bundle any MinGW runtime DLLs the core or app needs
+          for f in pkg/SmashTV/*.dll pkg/SmashTV/*.exe; do
+            ntldd -R "$f" | grep -io '[a-z]:\\[^ ]*mingw64[^ ]*\.dll' | while read -r d; do cp -n "$(cygpath -u "$d")" pkg/SmashTV/ ; done
+          done
+          cp packaging/README-player.txt pkg/SmashTV/README.txt
+          cd pkg && zip -qr ../SmashTV-windows-x64.zip SmashTV
+      - uses: actions/upload-artifact@v4
+        with: { name: SmashTV-windows-x64, path: SmashTV-windows-x64.zip }
+
+  android:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - name: Install NDK
+        run: sdkmanager --install "ndk;27.2.12479018"
+      - uses: actions/cache@v4
+        with:
+          path: android/app/libs
+          key: core-android-arm64-${{ hashFiles('android/build-apk.sh') }}
+      - name: Build APK
+        run: |
+          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018
+          android/build-apk.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: SmashTV-android, path: dist/SmashTV.apk }
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, macos, windows, android]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with: { files: out/* }
