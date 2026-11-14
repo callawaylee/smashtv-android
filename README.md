@@ -57,6 +57,23 @@ Copy the APK to the phone and open it to install (allow "install unknown apps" f
 The app contains no ROMs: on first start, tap the screen and pick your `smashtv.zip`.
 To try the touch controls on desktop: `./smashtv --touch`.
 
+#### Self-contained APK that opens straight into the game
+
+The base APK above asks you to pick your ROM once. To instead bake your own ROM into the app so it
+boots directly into play with no prompt, run — on your own machine, where the ROM stays:
+
+```
+android/bundle-rom.sh  SmashTV.apk  smashtv.zip  SmashTV-full.apk
+```
+
+It verifies your `smashtv.zip`, injects it as `assets/smashtv.zip`, and re-signs the APK. Needs
+`python3` plus either Android's `apksigner` or Java (`sudo dnf install -y java-17-openjdk-headless`,
+which lets the script fetch a one-file signer). Nothing is uploaded. Install `SmashTV-full.apk`.
+
+The app finds a bundled ROM automatically (APK asset, or `Android/data/<pkg>/files/smashtv.zip`), and
+for such self-contained builds it drops a credit and starts a game on its own (`autostart`, settable in
+`settings.ini`). The ROM check / arcade boot self-test is always skipped.
+
 ## Layout
 
 | Path | What |

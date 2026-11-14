@@ -16,7 +16,7 @@
 #include "touch.h"
 
 #define APP_NAME    "Smash T.V."
-#define APP_VERSION "1.2.0"
+#define APP_VERSION "1.3.0"
 #define GAME_NAME   "smashtv"
 
 #if defined(SDL_PLATFORM_ANDROID)
@@ -75,7 +75,8 @@ static struct {
     bool scanlines;
     bool fullscreen;
     bool skip_boot;      /* always on: the ~20 s arcade power-on self-test is fast-forwarded */
-} cfg = {true, false, true, false, true};
+    bool autostart;      /* self-contained builds: drop a credit and begin play automatically */
+} cfg = {true, false, true, false, true, true};
 
 #define BOOT_FRAMES 1150
 static int boot_left;
@@ -92,6 +93,7 @@ static uint16_t joy_mask[2];
 static int16_t joy_axis[2][4]; /* lx ly rx ry */
 static int start_seq[2];       /* free-play coin+start sequence frame counter */
 static bool start_prev[2];
+static bool rom_auto_boot;     /* ROMs came bundled with the app: skip the picker and auto-start a credit */
 
 /* OSD message */
 static char osd_msg[256];
@@ -137,14 +139,15 @@ static void load_settings(void) {
         else if (!strcmp(line, "smooth")) cfg.smooth = v;
         else if (!strcmp(line, "scanlines")) cfg.scanlines = v;
         else if (!strcmp(line, "fullscreen")) cfg.fullscreen = v;
+        else if (!strcmp(line, "autostart")) cfg.autostart = v;
     }
     SDL_free(t);
 }
 
 static void save_settings(void) {
     char buf[256];
-    int n = SDL_snprintf(buf, sizeof buf, "free_play=%d\nsmooth=%d\nscanlines=%d\nfullscreen=%d\nskip_boot=%d\n",
-                         cfg.free_play, cfg.smooth, cfg.scanlines, cfg.fullscreen, cfg.skip_boot);
+    int n = SDL_snprintf(buf, sizeof buf, "free_play=%d\nsmooth=%d\nscanlines=%d\nfullscreen=%d\nskip_boot=%d\nautostart=%d\n",
+                         cfg.free_play, cfg.smooth, cfg.scanlines, cfg.fullscreen, cfg.skip_boot, cfg.autostart);
     SDL_SaveFile(settings_path, buf, (size_t)n);
 }
 
@@ -711,12 +714,31 @@ extern const size_t smashtv_embedded_zip_size;
 #endif
 
 static bool find_roms_automatically(char *msg, size_t msglen) {
+#ifdef SDL_PLATFORM_ANDROID
+    /* Self-contained build: smashtv.zip bundled in the APK's assets. Read it (relative paths come
+       from the asset manager on Android), copy it into the data folder once, then boot straight in. */
+    {
+        size_t n = 0;
+        void *z = SDL_LoadFile("smashtv.zip", &n);
+        if (!z) z = SDL_LoadFile("roms/smashtv.zip", &n);
+        if (z) {
+            rom_auto_boot = true;
+            bool good = romset_check_zip(rom_zip, msg, msglen) == ROMSET_COUNT;   /* already unpacked */
+            if (!good) good = SDL_SaveFile(rom_zip, z, n) && romset_check_zip(rom_zip, msg, msglen) == ROMSET_COUNT;
+            SDL_free(z);
+            if (good) { logf_("Using ROMs bundled in the app\n"); return true; }
+            rom_auto_boot = false;
+            logf_("Bundled ROMs present but didn't verify: %s\n", msg);
+        }
+    }
+#endif
     if (romset_check_zip(rom_zip, msg, msglen) == ROMSET_COUNT) return true;
 #ifdef SMASHTV_EMBEDDED_ROMS
     /* ROMs are compiled into this build: unpack them to the data folder for the core */
     if (SDL_SaveFile(rom_zip, smashtv_embedded_zip, smashtv_embedded_zip_size)
         && romset_check_zip(rom_zip, msg, msglen) == ROMSET_COUNT) {
         logf_("Using ROMs built into the app\n");
+        rom_auto_boot = true;
         return true;
     }
     logf_("Built-in ROMs couldn't be unpacked: %s\n", msg);
@@ -736,6 +758,17 @@ static bool find_roms_automatically(char *msg, size_t msglen) {
         }
     }
     SDL_free(cwd);
+#ifdef SDL_PLATFORM_ANDROID
+    /* ROM dropped into the app's own folder (Android/data/<pkg>/files/smashtv.zip): no permission needed */
+    {
+        const char *ext = SDL_GetAndroidExternalStoragePath();
+        if (ext) {
+            char p[1200], tmp[256];
+            SDL_snprintf(p, sizeof p, "%s/smashtv.zip", ext);
+            if (try_import(p, tmp, sizeof tmp)) { rom_auto_boot = true; return true; }
+        }
+    }
+#endif
     msg[0] = 0;
     return false;
 }
@@ -925,6 +958,7 @@ int main(int argc, char **argv) {
     make_dirs();
     logf_("%s %s, data folder: %s\n", APP_NAME, APP_VERSION, pref_dir);
     load_settings();
+    if (SDL_getenv("SMASHTV_FORCE_AUTOBOOT")) rom_auto_boot = true;   /* test hook */
     if (force_full >= 0) cfg.fullscreen = force_full;
     pending_lock = SDL_CreateMutex();
 
@@ -1041,6 +1075,7 @@ int main(int argc, char **argv) {
 
     Uint64 freq = SDL_GetPerformanceFrequency(), last = SDL_GetPerformanceCounter();
     Uint64 t_start = SDL_GetTicks(), frames_total = 0, play_start = 0, play_frames = 0;
+    int autostart_kicks = 0;
     double acc = 0;
     const int bytes_per_frame = (int)(sample_rate / core_fps) * 4;
     boot_left = BOOT_FRAMES;
@@ -1158,6 +1193,17 @@ int main(int argc, char **argv) {
         frames_total += (Uint64)ran;
         if (boot_left == 0 && !play_start) play_start = SDL_GetTicks();
         else if (boot_left == 0 && !menu_open) play_frames += (Uint64)ran;
+        /* Self-contained build: once the title is up, drop a credit and press Start automatically so
+           the app opens straight into play. Two spaced attempts in case the first lands before the
+           title screen is ready; an extra banked credit is harmless under free play. */
+        if (rom_auto_boot && cfg.autostart && cfg.free_play && boot_left == 0 && play_start && !menu_open
+            && autostart_kicks < 2) {
+            Uint64 want = autostart_kicks == 0 ? 1800 : 5300;
+            if (SDL_GetTicks() - play_start >= want) {
+                if (start_seq[0] == 0) start_seq[0] = 1;   /* triggers the coin -> Start sequence */
+                autostart_kicks++;
+            }
+        }
         render_frame();
         {   /* automated check of the real loop: SMASHTV_TEST_LOOP_SHOT=seconds saves a screenshot and quits */
             static const char *ls = NULL; static bool lsi = false;

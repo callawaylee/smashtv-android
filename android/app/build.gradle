@@ -11,8 +11,8 @@ android {
         minSdkVersion 24
         targetSdkVersion 35
         applicationId "io.github.smashtv_native"
-        versionCode 1
-        versionName "1.2.0"
+        versionCode 2
+        versionName "1.3.0"
         externalNativeBuild {
             ndkBuild {
                 arguments "APP_PLATFORM=android-24"
@@ -30,6 +30,13 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    // Store native libs compressed/extracted (extractNativeLibs=true) so the APK can be
+    // re-zipped and re-signed after a ROM is added, without breaking library page-alignment.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
     applicationVariants.all { variant ->
